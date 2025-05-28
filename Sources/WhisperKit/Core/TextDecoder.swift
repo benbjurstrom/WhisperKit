@@ -284,7 +284,7 @@ public extension TextDecoding {
                                     valueTensor: prefilledDecoderInputs.valueCache,
                                     valueSlice: prefilledDecoderInputs.prefillValueCache,
                                     insertAtIndex: sotPosition)
-            prefilledDecoderInputs.cacheLength[0] = prefilledDecoderInputs.prefillKeyCache.shape[3] + promptOffset as NSNumber
+            prefilledDecoderInputs.cacheLength[0] = NSNumber(value: prefilledDecoderInputs.prefillKeyCache.shape[3].intValue + promptOffset)
         }
 
         return prefilledDecoderInputs
