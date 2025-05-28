@@ -135,12 +135,16 @@ open class TimestampRulesFilter: LogitsFiltering {
     private func sampleBegin(for tokens: [Int]) -> Int? {
         if isModelMultilingual {
             // NOTE: for multilingual model we don't want to supress "<|transcribe|>" or "<|translate|>" tokens
-            if let taskTokenIndex = tokens.prefix(3).firstIndex(where: { $0 == specialTokens.transcribeToken || $0 == specialTokens.translateToken }) {
+            if let taskTokenIndex = tokens.firstIndex(where: { $0 == specialTokens.transcribeToken || $0 == specialTokens.translateToken }) {
                 return max(taskTokenIndex + 1, sampleBegin)
             } else {
                 return nil
             }
         } else {
+            // For non-multilingual models, ensure we start after any prompt tokens
+            if let sotIndex = tokens.firstIndex(of: specialTokens.startOfTranscriptToken) {
+                return max(sotIndex + 1, sampleBegin)
+            }
             return sampleBegin
         }
     }

@@ -207,7 +207,7 @@ public extension TextDecoding {
         return decoderInputs
     }
 
-    func prefillDecoderInputs(_ decoderInputs: DecodingInputs, withOptions options: DecodingOptions?) async throws -> DecodingInputs {
+    public func prefillDecoderInputs(_ decoderInputs: DecodingInputs, withOptions options: DecodingOptions?) async throws -> DecodingInputs {
         guard let tokenizer = tokenizer else {
             // Tokenizer required for prefill
             throw WhisperError.tokenizerUnavailable()
@@ -216,7 +216,19 @@ public extension TextDecoding {
         let prefilledDecoderInputs = decoderInputs
 
         // Setup prefill tokens based on task and language
-        var prefillTokens: [Int] = [tokenizer.specialTokens.startOfTranscriptToken] // SOT
+        var prefillTokens: [Int] = []
+        
+        // Add prompt tokens first if provided
+        var promptOffset = 0
+        if let promptTokens = options?.promptTokens {
+            let maxPromptLen = (Constants.maxTokenContext / 2) - 1
+            let trimmedPromptTokens = Array(promptTokens.suffix(maxPromptLen)).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+            prefillTokens = [tokenizer.specialTokens.startOfPreviousToken] + trimmedPromptTokens
+            promptOffset = prefillTokens.count
+        }
+        
+        // Then add the standard tokens
+        prefillTokens.append(tokenizer.specialTokens.startOfTranscriptToken) // SOT
 
         var languageToken: Int = tokenizer.specialTokens.englishToken
         var taskToken: Int = tokenizer.specialTokens.transcribeToken
@@ -239,14 +251,7 @@ public extension TextDecoding {
             let timestampsToken = options.withoutTimestamps ? tokenizer.specialTokens.noTimestampsToken : tokenizer.specialTokens.timeTokenBegin
             prefillTokens.append(timestampsToken)
 
-            // Add prompt tokens
-            if let promptTokens = options.promptTokens {
-                let maxPromptLen = (Constants.maxTokenContext / 2) - 1
-                let trimmedPromptTokens = Array(promptTokens.suffix(maxPromptLen)).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
-                prefillTokens = [tokenizer.specialTokens.startOfPreviousToken] + trimmedPromptTokens + prefillTokens
-            }
-
-            // Add prefix tokens
+            // Add prefix tokens at the end
             if let prefixTokens = options.prefixTokens {
                 let trimmedPrefixTokens = Array(prefixTokens.suffix(Constants.maxTokenContext / 2)).filter { $0 < tokenizer.specialTokens.specialTokenBegin }
                 prefillTokens.append(contentsOf: trimmedPrefixTokens)
@@ -256,9 +261,11 @@ public extension TextDecoding {
         prefilledDecoderInputs.initialPrompt = prefillTokens
 
         if options?.usePrefillCache ?? false,
-           prefillData != nil,
-           options?.promptTokens == nil // TODO: allow prefill cache to be used with prompt tokens, currently breaks if it starts at non-zero index
+        prefillData != nil
         {
+            // Calculate the SOT position accounting for prompt tokens
+            let sotPosition = prefillTokens.firstIndex(of: tokenizer.specialTokens.startOfTranscriptToken) ?? promptOffset
+            
             // Prefilling kv cache data requires non-nil task and language tokens, set defaults if not provided
             // Task tokens are remapped to 0->transcribe and 1->translate for the prefill lookup table
             let task = MLMultiArray.from([taskToken == tokenizer.specialTokens.transcribeToken ? 0 : 1])
@@ -273,11 +280,11 @@ public extension TextDecoding {
             prefilledDecoderInputs.prefillValueCache = prefillOutput.valueCache!
 
             TextDecoder.updateKVCache(keyTensor: prefilledDecoderInputs.keyCache,
-                                      keySlice: prefilledDecoderInputs.prefillKeyCache,
-                                      valueTensor: prefilledDecoderInputs.valueCache,
-                                      valueSlice: prefilledDecoderInputs.prefillValueCache,
-                                      insertAtIndex: prefillTokens.firstIndex(of: tokenizer.specialTokens.startOfTranscriptToken) ?? 0)
-            prefilledDecoderInputs.cacheLength[0] = prefilledDecoderInputs.prefillKeyCache.shape[3]
+                                    keySlice: prefilledDecoderInputs.prefillKeyCache,
+                                    valueTensor: prefilledDecoderInputs.valueCache,
+                                    valueSlice: prefilledDecoderInputs.prefillValueCache,
+                                    insertAtIndex: sotPosition)
+            prefilledDecoderInputs.cacheLength[0] = prefilledDecoderInputs.prefillKeyCache.shape[3] + promptOffset as NSNumber
         }
 
         return prefilledDecoderInputs
